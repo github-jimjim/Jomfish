@@ -1,0 +1,8 @@
+[package]
+name = "flounder"
+version = "0.1.0"
+edition = "2015"
+
+[dependencies]
+memmap = "0.6.2"
+cryptify = "3.1.1"
