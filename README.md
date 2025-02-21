@@ -18,7 +18,7 @@ Jomfish is a powerful and feature-complete chess engine written in Rust, offerin
 ## Key Features
 
 - **Stockfish 11 Parity**: Jomfish includes all major features found in Stockfish 11, providing a high-performance engine capable of competing at advanced levels of play.
-- **No Neural Networks (NNUE)**: Unlike modern engines that rely on neural network-based evaluation, Jomfish exclusively uses classical evaluation methods. This ensures predictable and interpretable behavior during gameplay. But still it has a very strong performance of a estimated **3200** elo
+- **No Neural Networks (NNUE)**: Unlike modern engines that rely on neural network-based evaluation, Jomfish exclusively uses classical evaluation methods. This ensures predictable and interpretable behavior during gameplay. But still it has a very strong performance with an estimated 3200 Elo
 - **Rust-Based Development**: The engine was developed from scratch using the Rust programming language, focusing on performance, safety, and reliability.
 
 ---
@@ -45,8 +45,8 @@ This step is crucial because the build scripts expect the source files to be in 
 
 ## Licensing and Availability
 
-Jomfish is licensed under MIT
-Jomfish is available for use without modification. The engine is provided as-is, with no guarantees or support.
+Jomfish is available for use and modification under the MIT license. The engine is provided as-is, with no guarantees or support. 
+[LICENSE]([https://github.com/github-jimjim/Arenmy](https://github.com/github-jimjim/Jomfish/blob/main/LICENSE))
 
 ---
 
