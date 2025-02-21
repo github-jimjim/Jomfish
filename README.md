@@ -26,7 +26,10 @@ Jomfish is **no longer under active development**. The engine is considered feat
 Before compiling the project, you need to rename the folder:
 
 - **Step 1:** Rename the folder `src - compact` to `src`.
-- **Step 2:** Change the directory to the Root directory and type: ```bash cargo build --release```
+- **Step 2:** Change the directory to the Root directory and type:
+```bash
+cargo build --release
+```
 
 This step is crucial because the build scripts expect the source files to be in a folder named `src`. Once renamed, you can proceed with the usual build commands (e.g., using a build tool like `make`, `npm`, or your preferred compiler).
 
