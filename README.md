@@ -11,7 +11,7 @@ Jomfish is a powerful and feature-complete chess engine written in Rust, offerin
 - [Status](#Status)
 - [Compile Process](#compile-process)
 - [Licensing and Availability](#licensing-and-availability)
-- [Why Choose Jomfish?](#why-choose-jomfish?)
+- [Why Choose Jomfish?](#why-choose-jomfish)
 
 ---
 
