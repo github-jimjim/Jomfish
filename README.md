@@ -1,8 +1,6 @@
 # Jomfish
 # Jomfish Chess Engine
 
-<img src="./logo.ico" alt="Logo" width="512" height="512">
-
 Jomfish is a powerful and feature-complete chess engine written in Rust, offering a highly competitive chess-playing experience. It is fully compliant with the Universal Chess Interface (UCI) protocol, making it easy to integrate with popular chess GUIs such as ChessBase, Arena, and others.
 
 ---
@@ -58,3 +56,4 @@ Jomfish is available for use without modification. The engine is provided as-is,
 
 Jomfish is ideal for users looking for a robust, NNUE-free chess engine with proven features and a strong competitive edge. While it does not adopt neural network advancements, it remains a reliable option for classical evaluation enthusiasts and UCI-compatible setups.
 
+<img src="./logo.ico" alt="Logo" width="512" height="512">
