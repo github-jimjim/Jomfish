@@ -1,6 +1,6 @@
 [package]
-name = "flounder"
-version = "0.1.0"
+name = "Jomfish"
+version = "1.0.0"
 edition = "2015"
 
 [dependencies]
