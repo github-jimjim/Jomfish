@@ -10,6 +10,7 @@ Jomfish is a powerful and feature-complete chess engine written in Rust, offerin
 - [Key Features](#key-features)
 - [Status](#Status)
 - [Compile Process](#compile-process)
+- [Apology & Clarification](#apology-&-clarification)
 - [Licensing and Availability](#licensing-and-availability)
 - [Why Choose Jomfish?](#why-choose-jomfish)
 
@@ -40,6 +41,14 @@ cargo build --release
 ```
 
 This step is crucial because the build scripts expect the source files to be in a folder named `src`.
+
+---
+
+## Apology & Clarification
+
+I want to sincerely apologize for any complications caused by the initial release of Jomfish. A few months ago, when I first started using GitHub, I didn’t realize that releasing a chess engine required including a proper license and the full source code.
+
+Additionally, I’d like to clarify that Jomfish is not a 1:1 port of Stockfish. While it is heavily inspired by it, I had to optimize it specifically for Rust, focusing on memory safety and performance improvements. Although a port might sound simple, it was far from easy due to the major differences between Rust and C++.
 
 ---
 
