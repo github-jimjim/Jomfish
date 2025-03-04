@@ -47,7 +47,7 @@ This step is crucial because the build scripts expect the source files to be in 
 
 Jomfish is available for use and modification under the Stockfish GNU General Public License v3.0. The engine is provided as-is, with no guarantees or support. 
 
-[LICENSE](https://github.com/github-jimjim/Jomfish/blob/main/LICENSE)
+[LICENSE](https://github.com/github-jimjim/Jomfish/blob/main/Copying.txt)
 
 ---
 
