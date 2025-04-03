@@ -1,0 +1,477 @@
+use movegen::*;
+use position::Position;
+use search;
+use std::cell::Cell;
+use types::*;
+pub struct ButterflyHistory {
+    v: [[Cell<i16>; 4096]; 2],
+}
+impl ButterflyHistory {
+    pub fn get(&self, c: Color, m: Move) -> i32 {
+        self.v[c.0 as usize][m.from_to() as usize].get() as i32
+    }
+    pub fn update(&self, c: Color, m: Move, bonus: i32) {
+        let entry = &self.v[c.0 as usize][m.from_to() as usize];
+        let mut val = entry.get();
+        val += (bonus * 32 - val as i32 * bonus.abs() / 324) as i16;
+        entry.set(val);
+    }
+}
+pub struct PieceToHistory {
+    v: [[Cell<i16>; 64]; 16],
+}
+impl PieceToHistory {
+    pub fn get(&self, pc: Piece, s: Square) -> i32 {
+        self.v[pc.0 as usize][s.0 as usize].get() as i32
+    }
+    pub fn update(&self, pc: Piece, s: Square, bonus: i32) {
+        let entry = &self.v[pc.0 as usize][s.0 as usize];
+        let mut val = entry.get();
+        val += (bonus * 32 - val as i32 * bonus.abs() / 936) as i16;
+        entry.set(val);
+    }
+}
+pub struct CapturePieceToHistory {
+    v: [[[Cell<i16>; 8]; 64]; 16],
+}
+impl CapturePieceToHistory {
+    pub fn get(&self, pc: Piece, to: Square, cap: PieceType) -> i32 {
+        self.v[pc.0 as usize][to.0 as usize][cap.0 as usize].get() as i32
+    }
+    pub fn update(&self, pc: Piece, to: Square, cap: PieceType, bonus: i32) {
+        let entry = &self.v[pc.0 as usize][to.0 as usize][cap.0 as usize];
+        let mut val = entry.get();
+        val += (bonus * 2 - val as i32 * bonus.abs() / 324) as i16;
+        entry.set(val);
+    }
+}
+pub struct CounterMoveHistory {
+    v: [[Cell<Move>; 64]; 16],
+}
+impl CounterMoveHistory {
+    pub fn get(&self, pc: Piece, s: Square) -> Move {
+        self.v[pc.0 as usize][s.0 as usize].get()
+    }
+    pub fn set(&self, pc: Piece, s: Square, m: Move) {
+        self.v[pc.0 as usize][s.0 as usize].set(m);
+    }
+}
+pub struct ContinuationHistory {
+    v: [[PieceToHistory; 64]; 16],
+}
+impl ContinuationHistory {
+    pub fn get(&self, pc: Piece, s: Square) -> &'static PieceToHistory {
+        let p: *const PieceToHistory = &self.v[pc.0 as usize][s.0 as usize];
+        unsafe { &*p }
+    }
+    pub fn init(&self) {
+        let p = self.get(Piece(0), Square(0));
+        for pc in 0..16 {
+            for s in 0..64 {
+                p.v[pc][s].set(search::CM_THRESHOLD as i16 - 1);
+            }
+        }
+    }
+}
+pub struct MovePicker {
+    cur: usize,
+    end_moves: usize,
+    end_bad_captures: usize,
+    stage: i32,
+    depth: Depth,
+    tt_move: Move,
+    countermove: Move,
+    killers: [Move; 2],
+    cmh: [&'static PieceToHistory; 3],
+    list: [ExtMove; MAX_MOVES as usize],
+}
+pub struct MovePickerQ {
+    cur: usize,
+    end_moves: usize,
+    stage: i32,
+    depth: Depth,
+    tt_move: Move,
+    recapture_square: Square,
+    list: [ExtMove; MAX_MOVES as usize],
+}
+pub struct MovePickerPC {
+    cur: usize,
+    end_moves: usize,
+    stage: i32,
+    tt_move: Move,
+    threshold: Value,
+    list: [ExtMove; MAX_MOVES as usize],
+}
+const MAIN_SEARCH: i32 = 0;
+const CAPTURES_INIT: i32 = 1;
+const GOOD_CAPTURES: i32 = 2;
+const KILLERS: i32 = 3;
+const COUNTERMOVE: i32 = 4;
+const QUIET_INIT: i32 = 5;
+const QUIET: i32 = 6;
+const BAD_CAPTURES: i32 = 7;
+const EVASION: i32 = 8;
+const EVASIONS_INIT: i32 = 9;
+const ALL_EVASIONS: i32 = 10;
+const PROBCUT: i32 = 11;
+const PROBCUT_INIT: i32 = 12;
+const PROBCUT_CAPTURES: i32 = 13;
+const QSEARCH: i32 = 14;
+const QCAPTURES_INIT: i32 = 15;
+const QCAPTURES: i32 = 16;
+const QCHECKS: i32 = 17;
+fn partial_insertion_sort(list: &mut [ExtMove], limit: i32) {
+    let mut sorted_end = 0;
+    for p in 1..list.len() {
+        if list[p].value >= limit {
+            let tmp = list[p];
+            sorted_end += 1;
+            list[p] = list[sorted_end];
+            let mut q = sorted_end;
+            while q > 0 && list[q - 1].value < tmp.value {
+                list[q] = list[q - 1];
+                q -= 1;
+            }
+            list[q] = tmp;
+        }
+    }
+}
+fn pick_best(list: &mut [ExtMove]) -> Move {
+    let mut q = 0;
+    for p in 1..list.len() {
+        if list[p].value > list[q].value {
+            q = p;
+        }
+    }
+    list.swap(0, q);
+    list[0].m
+}
+fn score_captures(pos: &Position, list: &mut [ExtMove]) {
+    for m in list.iter_mut() {
+        m.value = piece_value(MG, pos.piece_on(m.m.to())).0
+            + pos.capture_history.get(
+                pos.moved_piece(m.m),
+                m.m.to(),
+                pos.piece_on(m.m.to()).piece_type(),
+            );
+    }
+}
+fn score_quiets(pos: &Position, mp: &mut MovePicker) {
+    let list = &mut mp.list[mp.cur..mp.end_moves];
+    for m in list.iter_mut() {
+        m.value = pos.main_history.get(pos.side_to_move(), m.m)
+            + mp.cmh[0].get(pos.moved_piece(m.m), m.m.to())
+            + mp.cmh[1].get(pos.moved_piece(m.m), m.m.to())
+            + mp.cmh[2].get(pos.moved_piece(m.m), m.m.to());
+    }
+}
+fn score_evasions(pos: &Position, list: &mut [ExtMove]) {
+    for m in list.iter_mut() {
+        m.value = if pos.capture(m.m) {
+            piece_value(MG, pos.piece_on(m.m.to())).0 - pos.moved_piece(m.m).piece_type().0 as i32
+        } else {
+            pos.main_history.get(pos.side_to_move(), m.m) - (1 << 28)
+        }
+    }
+}
+impl MovePicker {
+    pub fn new(pos: &Position, ttm: Move, d: Depth, ss: &[search::Stack]) -> MovePicker {
+        let mut stage = if pos.checkers() != 0 {
+            EVASION
+        } else {
+            MAIN_SEARCH
+        };
+        let tt_move = if ttm != Move::NONE && pos.pseudo_legal(ttm) {
+            ttm
+        } else {
+            Move::NONE
+        };
+        if tt_move == Move::NONE {
+            stage += 1;
+        }
+        let prev_sq = ss[4].current_move.to();
+        MovePicker {
+            cur: 0,
+            end_moves: 0,
+            end_bad_captures: 0,
+            stage: stage,
+            tt_move: ttm,
+            countermove: pos.counter_moves.get(pos.piece_on(prev_sq), prev_sq),
+            killers: [ss[5].killers[0], ss[5].killers[1]],
+            depth: d,
+            cmh: [ss[4].cont_history, ss[3].cont_history, ss[1].cont_history],
+            list: [ExtMove {
+                m: Move::NONE,
+                value: 0,
+            }; MAX_MOVES as usize],
+        }
+    }
+    pub fn next_move(&mut self, pos: &Position, skip_quiets: bool) -> Move {
+        loop {
+            match self.stage {
+                MAIN_SEARCH | EVASION => {
+                    self.stage += 1;
+                    return self.tt_move;
+                }
+                CAPTURES_INIT => {
+                    self.end_moves = generate::<Captures>(pos, &mut self.list, 0);
+                    score_captures(pos, &mut self.list[..self.end_moves]);
+                    self.stage += 1;
+                }
+                GOOD_CAPTURES => {
+                    while self.cur < self.end_moves {
+                        let m = pick_best(&mut self.list[self.cur..self.end_moves]);
+                        self.cur += 1;
+                        if m != self.tt_move {
+                            if pos.see_ge(m, Value(-55 * self.list[self.cur - 1].value / 1024)) {
+                                return m;
+                            }
+                            self.list[self.end_bad_captures].m = m;
+                            self.end_bad_captures += 1;
+                        }
+                    }
+                    self.stage += 1;
+                    let m = self.killers[0];
+                    if m != Move::NONE
+                        && m != self.tt_move
+                        && pos.pseudo_legal(m)
+                        && !pos.capture(m)
+                    {
+                        return m;
+                    }
+                }
+                KILLERS => {
+                    self.stage += 1;
+                    let m = self.killers[1];
+                    if m != Move::NONE
+                        && m != self.tt_move
+                        && pos.pseudo_legal(m)
+                        && !pos.capture(m)
+                    {
+                        return m;
+                    }
+                }
+                COUNTERMOVE => {
+                    self.stage += 1;
+                    let m = self.countermove;
+                    if m != Move::NONE
+                        && m != self.tt_move
+                        && m != self.killers[0]
+                        && m != self.killers[1]
+                        && pos.pseudo_legal(m)
+                        && !pos.capture(m)
+                    {
+                        return m;
+                    }
+                }
+                QUIET_INIT => {
+                    self.cur = self.end_bad_captures;
+                    self.end_moves = generate::<Quiets>(pos, &mut self.list, self.cur);
+                    score_quiets(pos, self);
+                    partial_insertion_sort(
+                        &mut self.list[self.cur..self.end_moves],
+                        -4000 * self.depth / ONE_PLY,
+                    );
+                    self.stage += 1;
+                }
+                QUIET => {
+                    if !skip_quiets {
+                        while self.cur < self.end_moves {
+                            let m = self.list[self.cur].m;
+                            self.cur += 1;
+                            if m != self.tt_move
+                                && m != self.killers[0]
+                                && m != self.killers[1]
+                                && m != self.countermove
+                            {
+                                return m;
+                            }
+                        }
+                    }
+                    self.stage += 1;
+                    self.cur = 0;
+                }
+                BAD_CAPTURES => {
+                    if self.cur < self.end_bad_captures {
+                        let m = self.list[self.cur].m;
+                        self.cur += 1;
+                        return m;
+                    }
+                    break;
+                }
+                EVASIONS_INIT => {
+                    self.cur = 0;
+                    self.end_moves = generate::<Evasions>(pos, &mut self.list, 0);
+                    score_evasions(pos, &mut self.list[..self.end_moves]);
+                    self.stage += 1;
+                }
+                ALL_EVASIONS => {
+                    while self.cur < self.end_moves {
+                        let m = pick_best(&mut self.list[self.cur..self.end_moves]);
+                        self.cur += 1;
+                        if m != self.tt_move {
+                            return m;
+                        }
+                    }
+                    break;
+                }
+                _ => {
+                    panic!("movepick")
+                }
+            }
+        }
+        Move::NONE
+    }
+}
+impl MovePickerQ {
+    pub fn new(pos: &Position, ttm: Move, d: Depth, s: Square) -> MovePickerQ {
+        let mut stage = if pos.checkers() != 0 {
+            EVASION
+        } else {
+            QSEARCH
+        };
+        let tt_move = if ttm != Move::NONE
+            && pos.pseudo_legal(ttm)
+            && (d > Depth::QS_RECAPTURES || ttm.to() == s)
+        {
+            ttm
+        } else {
+            stage += 1;
+            Move::NONE
+        };
+        MovePickerQ {
+            cur: 0,
+            end_moves: 0,
+            stage: stage,
+            depth: d,
+            tt_move: tt_move,
+            recapture_square: s,
+            list: [ExtMove {
+                m: Move::NONE,
+                value: 0,
+            }; MAX_MOVES as usize],
+        }
+    }
+    pub fn next_move(&mut self, pos: &Position) -> Move {
+        loop {
+            match self.stage {
+                EVASION | QSEARCH => {
+                    self.stage += 1;
+                    return self.tt_move;
+                }
+                EVASIONS_INIT => {
+                    self.cur = 0;
+                    self.end_moves = generate::<Evasions>(pos, &mut self.list, 0);
+                    score_evasions(pos, &mut self.list[..self.end_moves]);
+                    self.stage += 1;
+                }
+                ALL_EVASIONS => {
+                    while self.cur < self.end_moves {
+                        let m = pick_best(&mut self.list[self.cur..self.end_moves]);
+                        self.cur += 1;
+                        if m != self.tt_move {
+                            return m;
+                        }
+                    }
+                    break;
+                }
+                QCAPTURES_INIT => {
+                    self.cur = 0;
+                    self.end_moves = generate::<Captures>(pos, &mut self.list, 0);
+                    score_captures(pos, &mut self.list[..self.end_moves]);
+                    self.stage += 1;
+                }
+                QCAPTURES => {
+                    while self.cur < self.end_moves {
+                        let m = pick_best(&mut self.list[self.cur..self.end_moves]);
+                        self.cur += 1;
+                        if m != self.tt_move
+                            && (self.depth > Depth::QS_RECAPTURES
+                                || m.to() == self.recapture_square)
+                        {
+                            return m;
+                        }
+                    }
+                    if self.depth <= Depth::QS_NO_CHECKS {
+                        break;
+                    }
+                    self.cur = 0;
+                    self.end_moves = generate::<QuietChecks>(pos, &mut self.list, 0);
+                    self.stage += 1;
+                }
+                QCHECKS => {
+                    while self.cur < self.end_moves {
+                        let m = self.list[self.cur].m;
+                        self.cur += 1;
+                        if m != self.tt_move {
+                            return m;
+                        }
+                    }
+                    break;
+                }
+                _ => {
+                    panic!("movepick_q")
+                }
+            }
+        }
+        Move::NONE
+    }
+}
+impl MovePickerPC {
+    pub fn new(pos: &Position, ttm: Move, threshold: Value) -> MovePickerPC {
+        let tt_move;
+        let stage;
+        if ttm != Move::NONE
+            && pos.pseudo_legal(ttm)
+            && pos.capture(ttm)
+            && pos.see_ge(ttm, threshold)
+        {
+            tt_move = ttm;
+            stage = PROBCUT;
+        } else {
+            tt_move = Move::NONE;
+            stage = PROBCUT + 1;
+        }
+        MovePickerPC {
+            cur: 0,
+            end_moves: 0,
+            stage: stage,
+            tt_move: tt_move,
+            threshold: threshold,
+            list: [ExtMove {
+                m: Move::NONE,
+                value: 0,
+            }; MAX_MOVES as usize],
+        }
+    }
+    pub fn next_move(&mut self, pos: &Position) -> Move {
+        loop {
+            match self.stage {
+                PROBCUT => {
+                    self.stage += 1;
+                    return self.tt_move;
+                }
+                PROBCUT_INIT => {
+                    self.cur = 0;
+                    self.end_moves = generate::<Captures>(pos, &mut self.list, 0);
+                    score_captures(pos, &mut self.list[..self.end_moves]);
+                    self.stage += 1;
+                }
+                PROBCUT_CAPTURES => {
+                    while self.cur < self.end_moves {
+                        let m = pick_best(&mut self.list[self.cur..self.end_moves]);
+                        self.cur += 1;
+                        if m != self.tt_move && pos.see_ge(m, self.threshold) {
+                            return m;
+                        }
+                    }
+                    break;
+                }
+                _ => {
+                    panic!("movepick_pc")
+                }
+            }
+        }
+        Move::NONE
+    }
+}
