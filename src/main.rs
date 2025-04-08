@@ -1,4 +1,8 @@
 extern crate memmap;
+extern crate byteorder;
+extern crate chess;
+extern crate once_cell;
+
 mod benchmark;
 mod bitbases;
 #[macro_use]
@@ -20,7 +24,12 @@ mod tt;
 mod types;
 mod uci;
 mod ucioption;
+mod nnue;
+use nnue::init_nnue;
 use std::thread;
+
+const NNUE_MODEL: &[u8] = include_bytes!("nnue.jnn");
+
 fn main() {
     println!("{}", misc::engine_info(false));
     ucioption::init();
@@ -31,6 +40,10 @@ fn main() {
     search::init();
     pawns::init();
     endgame::init();
+    if let Err(e) = init_nnue(NNUE_MODEL) {
+        eprintln!("Fehler beim Initialisieren des Modells: {}", e);
+        return;
+    }
     tt::resize(ucioption::get_i32("Hash") as usize);
     threads::init(ucioption::get_i32("Threads") as usize);
     tb::init(ucioption::get_string("SyzygyPath"));
