@@ -573,14 +573,31 @@ pub fn init() {
 }
 fn sliding_attack(directions: [Direction; 4], sq: Square, occupied: Bitboard) -> Bitboard {
     let mut attack = Bitboard(0);
-    for d in directions.iter() {
-        let mut s = sq + *d;
-        while s.is_ok() && Square::distance(s, s - *d) == 1 {
-            attack |= s;
-            if occupied & s != 0 {
+    let start_file = sq.file() as i32;
+    let start_rank = sq.rank() as i32;
+    for &d in directions.iter() {
+        let (df, dr) = match d {
+            NORTH      => (0, 1),
+            SOUTH      => (0, -1),
+            EAST       => (1, 0),
+            WEST       => (-1, 0),
+            NORTH_EAST => (1, 1),
+            NORTH_WEST => (-1, 1),
+            SOUTH_EAST => (1, -1),
+            SOUTH_WEST => (-1, -1),
+            _          => (0, 0),
+        };
+        let mut file = start_file + df;
+        let mut rank = start_rank + dr;
+        while file >= 0 && file < 8 && rank >= 0 && rank < 8 {
+            let index = rank * 8 + file;
+            let current_sq = Square(index as u32);
+            attack |= current_sq;
+            if occupied & current_sq != Bitboard(0) {
                 break;
             }
-            s += *d;
+            file += df;
+            rank += dr;
         }
     }
     attack
