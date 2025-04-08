@@ -15,6 +15,7 @@ use tt;
 use types::*;
 use uci;
 use ucioption;
+use nnue;
 pub const CM_THRESHOLD: i32 = 0;
 pub struct Stack {
     pv: Vec<Move>,
@@ -145,9 +146,45 @@ static mut FUTILITY_MOVE_COUNTS: [[i32; 16]; 2] = [[0; 16]; 2];
 static mut REDUCTIONS: [[[[i32; 64]; 64]; 2]; 2] = [[[[0; 64]; 64]; 2]; 2];
 fn reduction<PvNode: NodeType>(i: bool, d: Depth, mn: i32) -> Depth {
     unsafe {
-        REDUCTIONS[PvNode::NT][i as usize][std::cmp::min(d / ONE_PLY, 63) as usize]
-            [std::cmp::min(mn, 63) as usize]
-            * ONE_PLY
+        let d_index = (d / ONE_PLY).min(63) as usize;
+        let mn_index = mn.min(63) as usize;
+        REDUCTIONS[PvNode::NT][i as usize][d_index][mn_index] * ONE_PLY
+    }
+}
+fn nnue_evaluate(pos: &Position) -> Value {
+    match nnue::eval_nnue(&pos.fen()) {
+        Ok(score) => Value((score * 1.0) as i32),
+        Err(_) => evaluate(pos),
+    }
+}
+fn get_nnue_threshold(max_depth: Depth) -> Depth {
+    let seldepth = max_depth / ONE_PLY; 
+    let threshold_plies = if seldepth < 18 {
+        18
+    } else if seldepth <= 24 { 
+        18 - ((seldepth - 18) * (18 - 10)) / (24 - 18)
+    } else if seldepth <= 30 { 
+        10 - ((seldepth - 24) * (10 - 6)) / (26 - 24)
+    } else if seldepth <= 127 { 
+        5 - ((seldepth - 26) * (5 - 2)) / (127 - 26)
+    } else {
+        2
+    };
+    threshold_plies * ONE_PLY
+}
+fn dynamic_evaluate(pos: &Position, depth: Depth, max_depth: Depth) -> Value {
+    let adaptive_threshold = ((max_depth.0 as f64 * 0.3).round() as i32) * ONE_PLY;
+    let nnue_threshold = get_nnue_threshold(max_depth);
+    let activation_threshold = if adaptive_threshold > nnue_threshold {
+        adaptive_threshold
+    } else {
+        nnue_threshold
+    };
+
+    if depth.0 >= activation_threshold.0 {
+        nnue_evaluate(pos)
+    } else {
+        evaluate(pos)
     }
 }
 fn futility_move_counts(i: bool, d: Depth) -> i32 {
@@ -515,20 +552,21 @@ fn search<NT: NodeType>(
     if pv_node && pos.sel_depth < ss[5].ply {
         pos.sel_depth = ss[5].ply;
     }
-    if !root_node {
-        if threads::stop() || pos.is_draw(ss[5].ply) || ss[5].ply >= MAX_PLY {
-            return if ss[5].ply >= MAX_PLY && !in_check {
-                evaluate(pos)
-            } else {
-                Value::DRAW
-            };
-        }
-        alpha = std::cmp::max(mated_in(ss[5].ply), alpha);
-        beta = std::cmp::min(mate_in(ss[5].ply + 1), beta);
-        if alpha >= beta {
-            return alpha;
-        }
-    }
+	if !root_node {
+		if threads::stop() || pos.is_draw(ss[5].ply) || ss[5].ply >= MAX_PLY {
+			return if ss[5].ply >= MAX_PLY && !in_check {
+				dynamic_evaluate(pos, depth, depth)
+			} else {
+				Value::DRAW
+			};
+		}
+		alpha = std::cmp::max(mated_in(ss[5].ply), alpha);
+		beta = std::cmp::min(mate_in(ss[5].ply + 1), beta);
+		if alpha >= beta {
+			return alpha;
+		}
+	}
+
     debug_assert!(0 <= ss[5].ply && ss[5].ply < MAX_PLY);
     ss[6].ply = ss[5].ply + 1;
     ss[5].current_move = Move::NONE;
@@ -664,45 +702,36 @@ fn search<NT: NodeType>(
         }
     }
     loop {
-        let eval;
+        let eval: Value;
         if in_check {
             ss[5].static_eval = Value::NONE;
             break;
-        } else if tt_hit {
-            let mut tmp = tte.eval();
-            if tmp == Value::NONE {
-                tmp = evaluate(pos);
-            }
-            ss[5].static_eval = tmp;
-            if tt_value != Value::NONE
-                && tte.bound()
-                    & (if tt_value > tmp {
-                        Bound::LOWER
-                    } else {
-                        Bound::UPPER
-                    })
-                    != 0
-            {
-                tmp = tt_value;
-            }
-            eval = tmp;
-        } else {
-            eval = if ss[4].current_move != Move::NULL {
-                evaluate(pos)
-            } else {
-                -ss[4].static_eval + 2 * evaluate::TEMPO
-            };
-            ss[5].static_eval = eval;
-            tte.save(
-                pos_key,
-                Value::NONE,
-                Bound::NONE,
-                Depth::NONE,
-                Move::NONE,
-                eval,
-                tt::generation(),
-            );
-        }
+		} else if tt_hit {
+			let mut tmp = tte.eval();
+			if tmp == Value::NONE {
+				tmp = dynamic_evaluate(pos, depth, depth);
+			}
+			ss[5].static_eval = tmp;
+			if tt_value != Value::NONE
+				&& tte.bound() & (if tt_value > tmp { Bound::LOWER } else { Bound::UPPER }) != 0
+			{
+				tmp = tt_value;
+			}
+			eval = tmp;
+		} else {
+			eval = dynamic_evaluate(pos, depth, depth);
+			
+			ss[5].static_eval = eval;
+			tte.save(
+				pos_key,
+				Value::NONE,
+				Bound::NONE,
+				Depth::NONE,
+				Move::NONE,
+				eval,
+				tt::generation(),
+			);
+		}
         if skip_early_pruning || pos.non_pawn_material_c(pos.side_to_move()) == Value::ZERO {
             break;
         }
@@ -1195,38 +1224,26 @@ fn qsearch<NT: NodeType, InCheck: Bool>(
     }
     let mut best_value;
     let futility_base;
-    if in_check {
-        ss[5].static_eval = Value::NONE;
-        best_value = -Value::INFINITE;
-        futility_base = -Value::INFINITE;
-    } else {
-        if tt_hit {
-            let mut tmp = tte.eval();
-            if tmp == Value::NONE {
-                tmp = evaluate(pos);
-            }
-            ss[5].static_eval = tmp;
-            if tt_value != Value::NONE
-                && tte.bound()
-                    & (if tt_value > tmp {
-                        Bound::LOWER
-                    } else {
-                        Bound::UPPER
-                    })
-                    != 0
-            {
-                best_value = tt_value;
-            } else {
-                best_value = tmp;
-            }
-        } else {
-            best_value = if ss[4].current_move != Move::NULL {
-                evaluate(pos)
-            } else {
-                -ss[4].static_eval + 2 * evaluate::TEMPO
-            };
-            ss[5].static_eval = best_value;
-        }
+	let eval = if in_check {
+		ss[5].static_eval = Value::NONE;
+		best_value = -Value::INFINITE;
+		dynamic_evaluate(pos, depth, depth)
+	} else if tt_hit {
+		let mut tmp = tte.eval();
+		if tmp == Value::NONE {
+			tmp = dynamic_evaluate(pos, depth, depth);
+		}
+		ss[5].static_eval = tmp;
+		best_value = tmp;
+		tmp  
+		} else {
+			let val = dynamic_evaluate(pos, depth, depth);
+			ss[5].static_eval = val;
+			best_value = val;
+			val
+		};
+
+
         if best_value >= beta {
             if !tt_hit {
                 tte.save(
@@ -1245,7 +1262,6 @@ fn qsearch<NT: NodeType, InCheck: Bool>(
             alpha = best_value;
         }
         futility_base = best_value + 128;
-    }
     let mut mp = MovePickerQ::new(pos, tt_move, depth, ss[4].current_move.to());
     loop {
         let m = mp.next_move(pos);
@@ -1362,12 +1378,10 @@ fn value_from_tt(v: Value, ply: i32) -> Value {
     }
 }
 fn update_pv(ss: &mut [Stack], m: Move) {
-    ss[5].pv.truncate(0);
+    ss[5].pv.clear();
     ss[5].pv.push(m);
-    for i in 0..ss[6].pv.len() {
-        let m = ss[6].pv[i];
-        ss[5].pv.push(m);
-    }
+    let pv6 = ss[6].pv.clone(); 
+    ss[5].pv.extend_from_slice(&pv6);
 }
 fn update_continuation_histories(ss: &[Stack], pc: Piece, to: Square, bonus: i32) {
     if ss[3].current_move.is_ok() {
