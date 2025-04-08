@@ -144,6 +144,7 @@ const RAZOR_MARGIN1: i32 = 590;
 const RAZOR_MARGIN2: i32 = 604;
 static mut FUTILITY_MOVE_COUNTS: [[i32; 16]; 2] = [[0; 16]; 2];
 static mut REDUCTIONS: [[[[i32; 64]; 64]; 2]; 2] = [[[[0; 64]; 64]; 2]; 2];
+#[inline(always)]
 fn reduction<PvNode: NodeType>(i: bool, d: Depth, mn: i32) -> Depth {
     unsafe {
         let d_index = (d / ONE_PLY).min(63) as usize;
@@ -151,6 +152,7 @@ fn reduction<PvNode: NodeType>(i: bool, d: Depth, mn: i32) -> Depth {
         REDUCTIONS[PvNode::NT][i as usize][d_index][mn_index] * ONE_PLY
     }
 }
+
 fn nnue_evaluate(pos: &Position) -> Value {
     match nnue::eval_nnue(&pos.fen()) {
         Ok(score) => Value((score * 1.0) as i32),
@@ -552,21 +554,20 @@ fn search<NT: NodeType>(
     if pv_node && pos.sel_depth < ss[5].ply {
         pos.sel_depth = ss[5].ply;
     }
-	if !root_node {
-		if threads::stop() || pos.is_draw(ss[5].ply) || ss[5].ply >= MAX_PLY {
-			return if ss[5].ply >= MAX_PLY && !in_check {
-				dynamic_evaluate(pos, depth, depth)
-			} else {
-				Value::DRAW
-			};
-		}
-		alpha = std::cmp::max(mated_in(ss[5].ply), alpha);
-		beta = std::cmp::min(mate_in(ss[5].ply + 1), beta);
-		if alpha >= beta {
-			return alpha;
-		}
-	}
-
+    if !root_node {
+        if threads::stop() || pos.is_draw(ss[5].ply) || ss[5].ply >= MAX_PLY {
+            return if ss[5].ply >= MAX_PLY && !pos.checkers() {
+                dynamic_evaluate(pos, depth, depth)
+            } else {
+                Value::DRAW
+            };
+        }
+        alpha = std::cmp::max(mated_in(ss[5].ply), alpha);
+        beta = std::cmp::min(mate_in(ss[5].ply + 1), beta);
+        if alpha >= beta {
+            return alpha;
+        }
+    }
     debug_assert!(0 <= ss[5].ply && ss[5].ply < MAX_PLY);
     ss[6].ply = ss[5].ply + 1;
     ss[5].current_move = Move::NONE;
