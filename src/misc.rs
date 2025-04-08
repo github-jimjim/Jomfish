@@ -13,7 +13,7 @@ impl Prng {
 }
 pub fn engine_info(to_uci: bool) -> String {
     if to_uci {
-        format!("Jomfish 10 dev\nid author Jimmy Luong")
+        format!("Jomfish H1 Beta\nid author Jimmy Luong")
     } else {
         let ascii_art = r#"
      ██╗ ██████╗ ███╗   ███╗███████╗██╗███████╗██╗  ██╗    ██╗  ██╗    ███████╗███████╗██████╗ ██╗███████╗
